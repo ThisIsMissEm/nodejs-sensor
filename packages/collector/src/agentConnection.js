@@ -190,6 +190,8 @@ exports.sendSpans = function sendSpans(spans, cb) {
     cb(err);
   });
 
+  // console.log('SENDING', JSON.stringify(spans, null, 2));
+
   sendData(`/com.instana.plugin.nodejs/traces.${pidStore.pid}`, spans, callback, true);
 };
 

@@ -95,6 +95,19 @@ function transmitSpans() {
   const spansToSend = spans;
   spans = [];
 
+  console.table(
+    spansToSend.map(span => ({
+      'span.n': span.n,
+      'span.data.sdk.name': span.data.sdk.name,
+      'span.k': span.k,
+      'span.data.sdk.type': span.data.sdk.type,
+      'span.t': span.t,
+      'span.s': span.s,
+      'span.p': span.p,
+      'span.data.service': span.data.service
+    }))
+  );
+
   downstreamConnection.sendSpans(spansToSend, function sendSpans(error) {
     if (error) {
       logger.warn(`Failed to transmit spans, will retry in ${transmissionDelay} ms.`, error.message);
