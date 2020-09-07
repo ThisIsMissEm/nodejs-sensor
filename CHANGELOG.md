@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+- Improve user experience around native add-on dependencies of `@instana/collector`:
+    - Add precompiled archives for some combination of OS, architecture, libc-flavour and ABI-version.
+    - Try to use the precompiled native add-on if loading a native add-on fails initially.
+    - Try to rebuild the native add-on on demand as a fallback.
+
 ## 1.106.2
 - [AWS Fargate]: Make optional dependencies on native add-ons truely optional (do not break the Docker build on `RUN /instana/setup.sh`).
 - Fix: Propagate `X-INSTANA-L: 0` downstream with AMQP headers.

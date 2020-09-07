@@ -19,3 +19,5 @@ exports.allMetrics = [
   require('./name'),
   require('./version')
 ];
+
+exports.util = require('util');

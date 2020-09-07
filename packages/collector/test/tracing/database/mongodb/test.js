@@ -309,7 +309,7 @@ describe('tracing/mongodb', function() {
       )
     )
       .then(() => Promise.delay(1000))
-      .then(agentStubControls.clearRetrievedData)
+      .then(agentStubControls.clearReceivedData)
       .then(() =>
         controls.sendRequest({
           method: 'GET',

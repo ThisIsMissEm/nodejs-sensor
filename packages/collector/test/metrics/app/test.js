@@ -1,15 +1,23 @@
 'use strict';
 
-const path = require('path');
-const expect = require('chai').expect;
 const _ = require('lodash');
+const async = require('async');
+const copy = require('recursive-copy');
+const expect = require('chai').expect;
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const rimraf = require('rimraf');
+const tar = require('tar');
 
 const config = require('../../../../core/test/config');
-const testUtils = require('../../../../core/test/test_util');
+const { retry } = require('../../../../core/test/test_util');
 const ProcessControls = require('../../test_util/ProcessControls');
 
 describe('snapshot data and metrics', function() {
-  this.timeout(config.getTestTimeout());
+  const timeout = Math.max(config.getTestTimeout(), 20000);
+  this.timeout(timeout);
+  const retryTimeout = timeout / 2;
 
   const agentControls = require('../../apps/agentStubControls');
   agentControls.registerTestHooks();
@@ -19,8 +27,12 @@ describe('snapshot data and metrics', function() {
   }).registerTestHooks();
 
   it('must report metrics from a running process', () =>
-    testUtils.retry(() =>
-      agentControls.getAllMetrics(controls.getPid()).then(allMetrics => {
+    retry(() =>
+      Promise.all([
+        //
+        agentControls.getAllMetrics(controls.getPid()),
+        agentControls.getAggregatedMetrics(controls.getPid())
+      ]).then(([allMetrics, aggregated]) => {
         expect(findMetric(allMetrics, ['activeHandles'])).to.exist;
         expect(findMetric(allMetrics, ['activeRequests'])).to.exist;
 
@@ -56,7 +68,14 @@ describe('snapshot data and metrics', function() {
         expect(findMetric(allMetrics, ['heapSpaces'])).to.exist;
         expect(findMetric(allMetrics, ['http'])).to.exist;
         expect(findMetric(allMetrics, ['keywords'])).to.deep.equal(['keyword1', 'keyword2']);
-        expect(findMetric(allMetrics, ['libuv'])).to.exist;
+        const libuv = aggregated.libuv;
+        expect(libuv).to.exist;
+        expect(libuv).to.be.an('object');
+        expect(libuv.statsSupported).to.be.true;
+        expect(libuv.min).to.be.a('number');
+        expect(libuv.max).to.be.a('number');
+        expect(libuv.sum).to.be.a('number');
+        expect(libuv.lag).to.be.a('number');
         expect(findMetric(allMetrics, ['memory'])).to.exist;
         expect(findMetric(allMetrics, ['name'])).to.equal('metrics-test-app');
         expect(findMetric(allMetrics, ['pid'])).to.equal(controls.getPid());
@@ -64,7 +83,117 @@ describe('snapshot data and metrics', function() {
         expect(`v${findMetric(allMetrics, ['versions', 'node'])}`).to.equal(process.version);
       })
     ));
+
+  describe('are activated lazily when support is initially missing', () => {
+    const sharedMetricsNodeModules = path.join(__dirname, '..', '..', '..', '..', 'shared-metrics', 'node_modules');
+    const resourcesPath = path.join(__dirname, '..', 'resources');
+
+    [
+      {
+        name: 'event-loop-stats',
+        nodeModulesPath: sharedMetricsNodeModules,
+        nativeModulePath: path.join(sharedMetricsNodeModules, 'event-loop-stats'),
+        backupPath: path.join(os.tmpdir(), 'event-loop-stats-backup'),
+        resourcesPath,
+        corruptTarGzPath: path.join(resourcesPath, 'event-loop-stats-corrupt.tar.gz'),
+        corruptUnpackedPath: path.join(resourcesPath, 'event-loop-stats'),
+        check: ([allMetrics, aggregated]) => {
+          // check that libuv stats are initially reported as unsupported
+          let foundAtLeastOneUnsupported;
+          for (let i = 0; i < allMetrics.length; i++) {
+            if (allMetrics[i].data.libuv) {
+              expect(allMetrics[i].data.libuv.statsSupported).to.not.exist;
+              foundAtLeastOneUnsupported = true;
+              break;
+            }
+          }
+          expect(foundAtLeastOneUnsupported).to.be.true;
+
+          // The for loop above ensures that the first metric POST that had the libuv payload
+          // had libuv.statsSupported === false. Now we check that at some point, the supported flag changed to true.
+          const libuv = aggregated.libuv;
+          expect(libuv).to.exist;
+          expect(libuv).to.be.an('object');
+          expect(libuv.statsSupported).to.be.true;
+          expect(libuv.min).to.be.a('number');
+          expect(libuv.max).to.be.a('number');
+          expect(libuv.sum).to.be.a('number');
+          expect(libuv.lag).to.be.a('number');
+        }
+      },
+      {
+        name: 'gcstats.js',
+        nodeModulesPath: sharedMetricsNodeModules,
+        nativeModulePath: path.join(sharedMetricsNodeModules, 'gcstats.js'),
+        backupPath: path.join(os.tmpdir(), 'gcstats.js-backup'),
+        resourcesPath,
+        corruptTarGzPath: path.join(resourcesPath, 'gcstats.js-corrupt.tar.gz'),
+        corruptUnpackedPath: path.join(resourcesPath, 'gcstats.js'),
+        check: ([allMetrics, aggregated]) => {
+          // check that gc stats are initially reported as unsupported
+          let foundAtLeastOneUnsupported;
+          for (let i = 0; i < allMetrics.length; i++) {
+            if (allMetrics[i].data.libuv) {
+              expect(allMetrics[i].data.gc.statsSupported).to.not.exist;
+              foundAtLeastOneUnsupported = true;
+              break;
+            }
+          }
+          expect(foundAtLeastOneUnsupported).to.be.true;
+
+          // The for loop above ensures that the first metric POST that had the gc payload
+          // had gc.statsSupported == undefined. Now we check that at some point, the supported flag changed to true.
+          const gc = aggregated.gc;
+          expect(gc).to.exist;
+          expect(gc).to.be.an('object');
+          expect(gc.statsSupported).to.be.true;
+          expect(gc.minorGcs).to.exist;
+          expect(gc.majorGcs).to.exist;
+        }
+      }
+    ].forEach(runLazyActivationOfNativeDependencyTest.bind(this, agentControls, controls, retryTimeout));
+  });
 });
+
+function runLazyActivationOfNativeDependencyTest(agentControls, controls, retryTimeout, opts) {
+  describe(opts.name, () => {
+    before(done => {
+      async.series(
+        [
+          tar.x.bind(null, {
+            cwd: opts.resourcesPath,
+            file: opts.corruptTarGzPath
+          }),
+          fs.rename.bind(null, opts.nativeModulePath, opts.backupPath),
+          copy.bind(null, opts.corruptUnpackedPath, opts.nativeModulePath)
+        ],
+        done
+      );
+    });
+
+    after(done => {
+      async.series(
+        [
+          rimraf.bind(null, opts.nativeModulePath),
+          rimraf.bind(null, opts.corruptUnpackedPath),
+          fs.rename.bind(null, opts.backupPath, opts.nativeModulePath)
+        ],
+        done
+      );
+    });
+
+    it('metrics from native add-ons should become available at some point', () =>
+      retry(
+        () =>
+          Promise.all([
+            //
+            agentControls.getAllMetrics(controls.getPid()),
+            agentControls.getAggregatedMetrics(controls.getPid())
+          ]).then(opts.check),
+        retryTimeout
+      ));
+  });
+}
 
 function findMetric(allMetrics, _path) {
   for (let i = allMetrics.length - 1; i >= 0; i--) {
