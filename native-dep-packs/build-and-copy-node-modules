@@ -1,0 +1,46 @@
+function buildAndCopyModules {
+  distro=$1
+  nodejsversion=$2
+  label=$distro-$nodejsversion
+  abi=$3
+  if [[ $distro = "standard" ]]; then
+    baseimage=node:$nodejsversion
+    libcflavour=glibc
+  elif [[ $distro = "alpine" ]]; then
+    baseimage=node:$nodejsversion-alpine
+    libcflavour=musl
+  else
+    echo "Unknown distro parameter: $distro"
+    exit 1
+  fi
+  dockerfile=Dockerfile.$distro
+  dockertag=$label-native-packs
+  docker stop $dockertag > /dev/null || true
+  docker rm -f $dockertag > /dev/null || true
+  echo "Building $dockerfile -> $dockertag"
+  docker build \
+    --build-arg BASE_IMAGE=$baseimage \
+    -f $dockerfile \
+    -t $dockertag \
+    .
+  echo "docker build exit status: $?"
+  echo "Running $dockertag"
+  docker run -t -d --name $dockertag $dockertag
+  echo "Waiting 5 seconds for the container to come up"
+  sleep 5
+  echo "Copying node_modules from container $dockertag to to node_modules_$label"
+  docker cp $dockertag:/instana/node_modules node_modules_$label
+  mkdir -p ../packages/shared-metrics/addons/linux/x64/$libcflavour/$abi/
+  mkdir -p ../packages/collector/addons/linux/x64/$libcflavour/$abi/
+  echo "Creating native addon tar.gz files"
+  pushd node_modules_$label/ > /dev/null
+  tar -czf ../../packages/shared-metrics/addons/linux/x64/$libcflavour/$abi/event-loop-stats.tar.gz event-loop-stats
+  tar -czf ../../packages/shared-metrics/addons/linux/x64/$libcflavour/$abi/gcstats.js.tar.gz gcstats.js
+  tar -czf ../../packages/collector/addons/linux/x64/$libcflavour/$abi/netlinkwrapper.tar.gz netlinkwrapper
+  popd > /dev/null
+  echo "Stopping $dockertag"
+  docker stop $dockertag > /dev/null
+  echo "Deleting $dockertag"
+  docker rm -f $dockertag > /dev/null
+}
+
