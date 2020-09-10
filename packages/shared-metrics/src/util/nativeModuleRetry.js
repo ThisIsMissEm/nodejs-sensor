@@ -1,6 +1,7 @@
 'use strict';
 
 let logger = require('@instana/core').logger.getLogger('metrics');
+// TODO who owns the logger
 exports.setLogger = function setLogger(_logger) {
   logger = _logger;
 };
@@ -83,7 +84,7 @@ function copyPrecompiled(opts, loaderEmitter, retryIndex) {
   if (abi) {
     const platform = os.platform();
     const arch = process.arch;
-    const libcFlavour = 'glibc';
+    const libcFlavour = 'glibc'; // TODO hard coded for now
     const label =
       platform === 'linux' ? `(${platform}/${arch}/${libcFlavour}/ABI ${abi})` : `(${platform}/${arch}/ABI ${abi})`;
     const precompiledPathPrefix = path.join(__dirname, '..', '..', 'addons', platform, arch);

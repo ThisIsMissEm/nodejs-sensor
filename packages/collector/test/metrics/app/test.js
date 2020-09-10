@@ -84,6 +84,7 @@ describe('snapshot data and metrics', function() {
       })
     ));
 
+  // TODO tests for other native add-ons too, in particular autoprofiling
   describe('are activated lazily when support is initially missing', () => {
     const sharedMetricsNodeModules = path.join(__dirname, '..', '..', '..', '..', 'shared-metrics', 'node_modules');
     const resourcesPath = path.join(__dirname, '..', 'resources');
